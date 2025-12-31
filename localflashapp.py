@@ -12,7 +12,7 @@ st.title("🚗 CarWale Pro: Variants, Mileage & Local Image Saver")
 
 # --- CONFIGURATION ---
 # Define your local save path
-SAVE_PATH = r"C:\Users\kanna\Pictures\App streamlit"
+SAVE_PATH = r"C:\Users\kanna\Pictures\App"
 
 # --- SCRAPING ENGINE ---
 def scrape_car_data(url):
