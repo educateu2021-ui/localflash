@@ -3,69 +3,85 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import io
+import time
 
-st.set_page_config(page_title="CarWale Variant Scraper", layout="wide")
-st.title("🚗 CarWale Variant Scraper")
+st.set_page_config(page_title="Bulk CarWale Scraper", layout="wide")
+st.title("📂 Bulk CarWale Variant Scraper")
 
-# Default to a live model so you can see it working immediately
-url = st.text_input("Enter CarWale Model URL:", "https://www.carwale.com/nissan-cars/magnite/")
+# Step 1: Upload Excel File
+uploaded_file = st.file_uploader("Upload Excel file with links", type=["xlsx", "csv"])
 
-def scrape_car_data(target_url):
+def scrape_car_data(url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
     }
-    
     try:
-        response = requests.get(target_url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=15)
         if response.status_code != 200:
-            return None, f"Error: Site returned status {response.status_code}"
-
-        soup = BeautifulSoup(response.text, 'html.parser')
+            return None
         
-        # Finding variant rows using standard CarWale classes
+        soup = BeautifulSoup(response.text, 'html.parser')
         rows = soup.find_all('tr', class_=lambda x: x and 'version-table__tbody-tr' in x)
         
-        if not rows:
-            return None, "No variant table found. (Note: Upcoming cars like e-Vitara don't have tables yet.)"
-
         data = []
         for row in rows:
-            # 1. Variant Name
             name_tag = row.find('a', class_='o-js')
             variant_name = name_tag.text.strip() if name_tag else "N/A"
             
-            # 2. Specifications (Extracted from the 'title' attribute of the info span)
             specs_tag = row.find('span', class_='o-jL')
             specs = specs_tag.get('title') if specs_tag else "N/A"
             
-            # 3. On-Road Price
             price_tag = row.find('div', class_='o-eQ') or row.find('span', string=lambda t: t and "Lakh" in t)
             price = price_tag.text.strip() if price_tag else "N/A"
             
             data.append({
+                "Source URL": url,
                 "Variant Name": variant_name,
                 "Specifications": specs,
                 "On-Road Price": price
             })
-            
-        return pd.DataFrame(data), None
+        return data
+    except:
+        return None
 
-    except Exception as e:
-        return None, f"System Error: {str(e)}"
-
-if st.button("Extract Data"):
-    with st.spinner("Fetching variant details..."):
-        df, error = scrape_car_data(url)
+if uploaded_file:
+    # Read the file
+    if uploaded_file.name.endswith('.csv'):
+        input_df = pd.read_csv(uploaded_file)
+    else:
+        input_df = pd.read_excel(uploaded_file)
+    
+    st.write("Preview of uploaded file:")
+    st.dataframe(input_df.head())
+    
+    # Step 2: Select the column with links
+    column_with_links = st.selectbox("Select the column that contains the links:", input_df.columns)
+    
+    if st.button("🚀 Start Bulk Scraping"):
+        links = input_df[column_with_links].dropna().tolist()
+        all_results = []
+        progress_bar = st.progress(0)
         
-        if error:
-            st.error(error)
-        else:
-            st.success(f"Successfully found {len(df)} variants!")
-            st.dataframe(df, use_container_width=True)
+        for i, link in enumerate(links):
+            st.write(f"Scraping: {link}")
+            result = scrape_car_data(link)
+            if result:
+                all_results.extend(result)
             
-            # Export to Excel
+            # Progress update
+            progress_bar.progress((i + 1) / len(links))
+            # Small delay to avoid being blocked
+            time.sleep(1) 
+        
+        if all_results:
+            final_df = pd.DataFrame(all_results)
+            st.success(f"Done! Extracted {len(final_df)} variants from {len(links)} links.")
+            st.dataframe(final_df)
+            
+            # Step 3: Download Combined Results
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False)
-            st.download_button("📥 Download Excel File", output.getvalue(), "car_variants.xlsx")
+                final_df.to_excel(writer, index=False, sheet_name='All_Variants')
+            st.download_button("📥 Download Combined Excel", output.getvalue(), "bulk_car_variants.xlsx")
+        else:
+            st.error("No data could be extracted. Check your links.")
