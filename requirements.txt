@@ -4,3 +4,4 @@ requests
 pandas
 xlsxwriter
 openpyxl
+pip install streamlit requests
