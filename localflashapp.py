@@ -7,10 +7,11 @@ import time
 import random
 
 st.set_page_config(page_title="CarWale Ultimate Scraper", layout="wide")
-st.title("🚗 CarWale Pro Scraper & Reporter")
+st.title("🚗 CarWale Pro: Variants, Mileage & Images")
 
-# --- CENTRAL SCRAPING ENGINE ---
+# --- SCRAPING ENGINE ---
 def scrape_car_data(url):
+    # Modern headers to prevent 403 Forbidden errors
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -19,11 +20,11 @@ def scrape_car_data(url):
     try:
         response = requests.get(url, headers=headers, timeout=25)
         if response.status_code != 200:
-            return None, None, None, f"Status {response.status_code}: Blocked."
+            return None, None, None, f"Status {response.status_code}: Access Denied."
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # 1. Exterior Image / .png detection
+        # 1. Exterior Image extraction (.png/exterior)
         exterior_img = "N/A"
         img_tags = soup.find_all('img')
         for img in img_tags:
@@ -46,6 +47,7 @@ def scrape_car_data(url):
             price = price_tag.get_text(separator=" ").strip().split("View")[0] if price_tag else "N/A"
             
             variant_list.append({
+                "Model": url.split('/')[-2].replace('-', ' ').title(),
                 "Variant Name": variant_name, "Specifications": specs, "Price": price, "Image URL": exterior_img
             })
 
@@ -55,10 +57,11 @@ def scrape_car_data(url):
         if m_section:
             m_table = m_section.find('table')
             if m_table:
-                for m_row in m_table.find_all('tr')[1:]: # Skip header
+                for m_row in m_table.find_all('tr')[1:]: 
                     cells = m_row.find_all('td')
                     if len(cells) >= 2:
                         mileage_list.append({
+                            "Model": url.split('/')[-2].replace('-', ' ').title(),
                             "Powertrain": cells[0].get_text(separator=" ", strip=True),
                             "ARAI Mileage": cells[1].get_text(strip=True),
                             "User Mileage": cells[2].get_text(strip=True) if len(cells) > 2 else "-"
@@ -69,24 +72,23 @@ def scrape_car_data(url):
         return None, None, None, str(e)
 
 # --- UI TABS ---
-tab1, tab2 = st.tabs(["🔗 Single Search", "📂 Bulk Build Run"])
+tab1, tab2 = st.tabs(["🔗 Single URL", "📂 Bulk Build Run"])
 
 with tab1:
     u_input = st.text_input("Paste CarWale Model URL:")
-    if st.button("Generate Single Report"):
+    if st.button("Generate Report"):
         v, m, img, err = scrape_car_data(u_input)
         if v:
-            st.image(img, width=400) if img != "N/A" else st.info("No PNG image detected.")
-            v_df = pd.DataFrame(v)
-            m_df = pd.DataFrame(m)
-            st.table(v_df)
+            if img != "N/A": st.image(img, width=400)
+            v_df, m_df = pd.DataFrame(v), pd.DataFrame(m)
+            st.table(v_df[["Variant Name", "Specifications", "Price"]])
             
-            # Export for Single Search
+            # Export button in single tab
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
                 v_df.to_excel(writer, sheet_name='Variants', index=False)
                 m_df.to_excel(writer, sheet_name='Mileage', index=False)
-            st.download_button("📥 Export Single Report", buf.getvalue(), "single_car_report.xlsx")
+            st.download_button("📥 Download Single Report", buf.getvalue(), "single_report.xlsx")
         else: st.error(err)
 
 with tab2:
@@ -99,17 +101,18 @@ with tab2:
             p = st.progress(0)
             links = df_in[c_name].dropna().tolist()
             for i, link in enumerate(links):
-                st.write(f"Scraping: {link}")
+                st.write(f"Scraping {i+1}/{len(links)}: {link}")
                 v_r, m_r, _, _ = scrape_car_data(link)
                 if v_r: all_v.extend(v_r)
                 if m_r: all_m.extend(m_r)
-                time.sleep(random.uniform(2.5, 4.0)) # Critical delay
+                # Polite delay to avoid IP block
+                time.sleep(random.uniform(3.0, 6.0)) 
                 p.progress((i + 1) / len(links))
             
             if all_v:
-                v_final, m_final = pd.DataFrame(all_v), pd.DataFrame(all_m)
+                v_f, m_f = pd.DataFrame(all_v), pd.DataFrame(all_m)
                 buf_bulk = io.BytesIO()
                 with pd.ExcelWriter(buf_bulk, engine='xlsxwriter') as writer:
-                    v_final.to_excel(writer, sheet_name='Variants', index=False)
-                    m_final.to_excel(writer, sheet_name='Mileage', index=False)
-                st.download_button("📥 Download Final Bulk Report", buf_bulk.getvalue(), "bulk_car_data.xlsx")
+                    v_f.to_excel(writer, sheet_name='Variants', index=False)
+                    m_f.to_excel(writer, sheet_name='Mileage', index=False)
+                st.download_button("📥 Download Final Bulk Report", buf_bulk.getvalue(), "bulk_report.xlsx")
