@@ -1,118 +1,52 @@
 import streamlit as st
 import requests
-from bs4 import BeautifulSoup
-import pandas as pd
-import io
-import time
-import random
+import os
+from pathlib import Path
 
-st.set_page_config(page_title="CarWale Ultimate Scraper", layout="wide")
-st.title("🚗 CarWale Pro: Variants, Mileage & Images")
+# Set the target local folder path
+SAVE_PATH = r"C:\Users\kanna\Pictures\App streamlit and git hub app"
 
-# --- SCRAPING ENGINE ---
-def scrape_car_data(url):
-    # Modern headers to prevent 403 Forbidden errors
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/"
-    }
+def download_file(url, folder):
+    # Create the directory if it doesn't exist
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+        st.info(f"Created new directory: {folder}")
+
     try:
-        response = requests.get(url, headers=headers, timeout=25)
-        if response.status_code != 200:
-            return None, None, None, f"Status {response.status_code}: Access Denied."
+        # Get the filename from the URL
+        filename = url.split("/")[-1].split("?")[0]
+        if not filename:
+            filename = "downloaded_file"
         
-        soup = BeautifulSoup(response.text, 'html.parser')
+        full_path = os.path.join(folder, filename)
+
+        # Fetch the content
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+
+        # Write to local folder
+        with open(full_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
         
-        # 1. Exterior Image extraction (.png/exterior)
-        exterior_img = "N/A"
-        img_tags = soup.find_all('img')
-        for img in img_tags:
-            src = img.get('src') or img.get('data-src') or img.get('srcset', '').split(' ')[0]
-            if src and ('.png' in src.lower() or 'exterior' in src.lower()):
-                exterior_img = src
-                break
-
-        # 2. Variant Table Extraction
-        v_rows = soup.find_all('tr', class_=lambda x: x and ('version-table' in x or 'o-cp' in x or 'o-kY' in x))
-        variant_list = []
-        for row in v_rows:
-            name_box = row.find('div', attrs={"line": "2"}) or row.find('a', class_='o-js')
-            if not name_box: continue
-            
-            variant_name = name_box.get('title', name_box.get_text()).strip()
-            specs_tag = row.find('span', class_='o-jL') or row.find('span', class_='o-j3')
-            specs = specs_tag.get('title', specs_tag.get_text()) if specs_tag else "N/A"
-            price_tag = row.find('div', class_='o-eQ') or row.find('span', string=lambda t: t and ("Lakh" in t or "Cr" in t))
-            price = price_tag.get_text(separator=" ").strip().split("View")[0] if price_tag else "N/A"
-            
-            variant_list.append({
-                "Model": url.split('/')[-2].replace('-', ' ').title(),
-                "Variant Name": variant_name, "Specifications": specs, "Price": price, "Image URL": exterior_img
-            })
-
-        # 3. Mileage Section Extraction
-        mileage_list = []
-        m_section = soup.find('section', attrs={"data-section-id": "mileage-section"})
-        if m_section:
-            m_table = m_section.find('table')
-            if m_table:
-                for m_row in m_table.find_all('tr')[1:]: 
-                    cells = m_row.find_all('td')
-                    if len(cells) >= 2:
-                        mileage_list.append({
-                            "Model": url.split('/')[-2].replace('-', ' ').title(),
-                            "Powertrain": cells[0].get_text(separator=" ", strip=True),
-                            "ARAI Mileage": cells[1].get_text(strip=True),
-                            "User Mileage": cells[2].get_text(strip=True) if len(cells) > 2 else "-"
-                        })
-
-        return variant_list, mileage_list, exterior_img, None
+        return True, full_path
     except Exception as e:
-        return None, None, None, str(e)
+        return False, str(e)
 
-# --- UI TABS ---
-tab1, tab2 = st.tabs(["🔗 Single URL", "📂 Bulk Build Run"])
+# Streamlit UI
+st.title("🔗 Link Fetcher & Local Saver")
+st.write(f"Files will be saved to: `{SAVE_PATH}`")
 
-with tab1:
-    u_input = st.text_input("Paste CarWale Model URL:")
-    if st.button("Generate Report"):
-        v, m, img, err = scrape_car_data(u_input)
-        if v:
-            if img != "N/A": st.image(img, width=400)
-            v_df, m_df = pd.DataFrame(v), pd.DataFrame(m)
-            st.table(v_df[["Variant Name", "Specifications", "Price"]])
+url_input = st.text_input("Paste the link (URL) here:", placeholder="https://example.com/image.jpg")
+
+if st.button("Download and Save Local"):
+    if url_input:
+        with st.spinner("Fetching and saving..."):
+            success, result = download_file(url_input, SAVE_PATH)
             
-            # Export button in single tab
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-                v_df.to_excel(writer, sheet_name='Variants', index=False)
-                m_df.to_excel(writer, sheet_name='Mileage', index=False)
-            st.download_button("📥 Download Single Report", buf.getvalue(), "single_report.xlsx")
-        else: st.error(err)
-
-with tab2:
-    f_input = st.file_uploader("Upload Excel Template", type=["xlsx"])
-    if f_input:
-        df_in = pd.read_excel(f_input)
-        c_name = st.selectbox("URL Column:", df_in.columns)
-        if st.button("🚀 Start Bulk Build Run (20+ Links)"):
-            all_v, all_m = [], []
-            p = st.progress(0)
-            links = df_in[c_name].dropna().tolist()
-            for i, link in enumerate(links):
-                st.write(f"Scraping {i+1}/{len(links)}: {link}")
-                v_r, m_r, _, _ = scrape_car_data(link)
-                if v_r: all_v.extend(v_r)
-                if m_r: all_m.extend(m_r)
-                # Polite delay to avoid IP block
-                time.sleep(random.uniform(3.0, 6.0)) 
-                p.progress((i + 1) / len(links))
-            
-            if all_v:
-                v_f, m_f = pd.DataFrame(all_v), pd.DataFrame(all_m)
-                buf_bulk = io.BytesIO()
-                with pd.ExcelWriter(buf_bulk, engine='xlsxwriter') as writer:
-                    v_f.to_excel(writer, sheet_name='Variants', index=False)
-                    m_f.to_excel(writer, sheet_name='Mileage', index=False)
-                st.download_button("📥 Download Final Bulk Report", buf_bulk.getvalue(), "bulk_report.xlsx")
+            if success:
+                st.success(f"✅ Success! Saved to: {result}")
+            else:
+                st.error(f"❌ Error: {result}")
+    else:
+        st.warning("Please enter a valid URL.")
