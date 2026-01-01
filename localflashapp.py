@@ -1,96 +1,73 @@
 import streamlit as st
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import time
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
 
-# --- Page Config ---
-st.set_page_config(page_title="CarInfo Vehicle Search", page_icon="🏎️")
-st.title("🏎️ CarInfo Vehicle Detail Scraper")
+st.set_page_config(page_title="E-Vandi Vehicle Fetcher", page_icon="🚗")
 
-def get_driver():
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    
-    # Bypass bot detection headers
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    
-    # STREAMLIT CLOUD SPECIFIC PATHS
-    # These paths are created by the packages.txt file
-    options.binary_location = "/usr/bin/chromium"
-    service = Service("/usr/bin/chromedriver")
-    
-    return webdriver.Chrome(service=service, options=options)
+# Custom CSS to match your branding
+st.markdown("""
+    <style>
+    .main { background-color: #f5ffff; }
+    .stButton>button { background-color: #08979c; color: white; border-radius: 20px; width: 100%; }
+    </style>
+    """, unsafe_import_headers=True)
 
-def search_car_info(veh_num):
-    driver = get_driver()
-    url = "https://www.carinfo.app/rto-vehicle-registration-detail"
-    
-    try:
-        driver.get(url)
-        wait = WebDriverWait(driver, 15)
+st.title("🚗 Vehicle Detail Fetcher")
+st.info("Enter the vehicle number to retrieve RTO details.")
 
-        # 1. Find the input field
-        # CarInfo uses a specific input for registration
-        search_input = wait.until(EC.presence_of_element_located((By.XPATH, "//input[contains(@placeholder, 'Enter Vehicle Number')]")))
-        search_input.send_keys(veh_num)
+# User Input
+v_number = st.text_input("Vehicle Number", placeholder="e.g. TN18BK0911").upper().replace(" ", "")
+
+if st.button("Fetch Details"):
+    if v_number:
+        # Based on your HTML, the site routes directly to this URL
+        target_url = f"https://www.carinfo.app/rto-vehicle-registration-detail/rto-details/{v_number}"
         
-        # 2. Click the search button (usually a magnifying glass or 'Search')
-        search_btn = driver.find_element(By.XPATH, "//button[contains(text(), 'Search')] | //span[contains(@class, 'search')]")
-        search_btn.click()
-        
-        # 3. Wait for results to load
-        # We look for common labels like 'Owner Name' or 'Model'
-        wait.until(EC.visibility_of_element_located((By.XPATH, "//*[contains(text(), 'Owner')] | //*[contains(text(), 'Model')]")))
-        
-        # 4. Scrape the data found on page
-        # This is a generic extraction of all 'key-value' pairs found in result cards
-        results = {}
-        info_cards = driver.find_elements(By.CSS_SELECTOR, "div[class*='Details'], div[class*='Card']")
-        
-        for card in info_cards:
-            text = card.text
-            if ":" in text:
-                lines = text.split('\n')
-                for line in lines:
-                    if ":" in line:
-                        parts = line.split(":", 1)
-                        results[parts[0].strip()] = parts[1].strip()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        }
 
-        if not results:
-            # Fallback: Just grab the whole page text if specific cards aren't found
-            return {"status": "success", "raw_data": driver.find_element(By.TAG_NAME, "body").text[:500]}
+        try:
+            with st.spinner('Fetching from CarInfo...'):
+                response = requests.get(target_url, headers=headers)
+                
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    
+                    # Finding the detail containers based on the CSS classes in your HTML
+                    # Specifically looking for: expand_component_detailItem__V43eh
+                    details = {}
+                    items = soup.find_all(class_=lambda x: x and 'detailItem' in x)
+                    
+                    for item in items:
+                        # Extract Label (e.g., Owner Name)
+                        label_tag = item.find(class_=lambda x: x and 'itemText' in x)
+                        # Extract Value (e.g., John Doe)
+                        value_tag = item.find(class_=lambda x: x and 'itemSubTitle' in x)
+                        
+                        if label_tag and value_tag:
+                            details[label_tag.text.strip()] = value_tag.text.strip()
 
-        return {"status": "success", "data": results}
-
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-    finally:
-        driver.quit()
-
-# --- Streamlit UI ---
-veh_no = st.text_input("Enter Vehicle Number", placeholder="e.g. MH01AB1234").upper().replace(" ", "")
-
-if st.button("Get Details"):
-    if veh_no:
-        with st.spinner("Accessing CarInfo.app..."):
-            result = search_car_info(veh_no)
-            
-            if result["status"] == "success":
-                st.success("Details Extracted!")
-                if "data" in result:
-                    # Display as a clean table
-                    st.table(result["data"])
+                    if details:
+                        st.success(f"Results for {v_number}")
+                        
+                        # Displaying in a clean table format
+                        df = pd.DataFrame(list(details.items()), columns=["Field", "Information"])
+                        st.table(df)
+                        
+                        st.markdown(f"[View Original Source]({target_url})")
+                    else:
+                        st.error("Could not find specific details. The vehicle might not be in the database or the site is blocking the request.")
                 else:
-                    st.write(result["raw_data"])
-            else:
-                st.error(f"Error: {result['message']}")
-                st.info("Tip: CarInfo often uses Captchas. If this fails, the site is blocking automated access.")
+                    st.error(f"Site unreachable (Status: {response.status_code})")
+                    
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
     else:
         st.warning("Please enter a vehicle number.")
+
+st.sidebar.markdown("### Instructions")
+st.sidebar.write("1. Enter Plate Number.")
+st.sidebar.write("2. Click Fetch.")
+st.sidebar.write("3. Details are parsed from the public RTO registry via CarInfo.")
