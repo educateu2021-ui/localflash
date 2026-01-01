@@ -8,10 +8,10 @@ st.set_page_config(page_title="E-Vandi Vehicle Fetcher", page_icon="🚗")
 # Custom CSS to match your branding
 st.markdown("""
     <style>
-    .main { background-color: #f5ffff; }
-    .stButton>button { background-color: #08979c; color: white; border-radius: 20px; width: 100%; }
+        .main { background-color: #f5ffff; }
+        .stButton>button { background-color: #08979c; color: white; border-radius: 20px; width: 100%; }
     </style>
-    """, unsafe_import_headers=True)
+    """, unsafe_allow_html=True)
 
 st.title("🚗 Vehicle Detail Fetcher")
 st.info("Enter the vehicle number to retrieve RTO details.")
