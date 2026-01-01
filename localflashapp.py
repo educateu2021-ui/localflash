@@ -1,91 +1,92 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import pandas as pd
-from io import BytesIO
+import time
 
-st.set_page_config(page_title="E-Vandi Detail Fetcher", page_icon="🚗")
+# --- BROWSER SETUP FOR STREAMLIT CLOUD ---
+def get_driver():
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    return webdriver.Chrome(options=options)
 
-# Styling
-st.markdown("""
-    <style>
-    .main { background-color: #f5ffff; }
-    .stButton>button { background-color: #08979c; color: white; border-radius: 20px; width: 100%; font-weight: bold; }
-    .stTable { background-color: white; border-radius: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(page_title="E-Vandi Data Logger", page_icon="🚗")
 
-st.title("🚗 Vehicle Detail Fetcher")
-st.info("Retrieve RTO, Model, and Owner details from CarInfo.")
+st.title("🚗 E-Vandi | AckoDrive Automation")
+st.markdown("Enter the registration number to automate fetching and splitting data.")
 
-v_number = st.text_input("Vehicle Number", placeholder="e.g. TN18BK0911").upper().replace(" ", "")
+# --- USER INPUT ---
+v_number = st.text_input("Enter Vehicle Number", placeholder="TN 18 BK 0911").upper()
 
-# Helper function to convert dataframe to excel for download
-def to_excel(df):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Vehicle_Report')
-    processed_data = output.getvalue()
-    return processed_data
-
-if st.button("Fetch Details"):
+if st.button("Automate Fetch & Save"):
     if v_number:
-        target_url = f"https://www.carinfo.app/rto-vehicle-registration-detail/rto-details/{v_number}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"}
-
+        driver = get_driver()
         try:
-            with st.spinner('Accessing records...'):
-                response = requests.get(target_url, headers=headers, timeout=15)
+            with st.spinner('Opening AckoDrive and entering details...'):
+                driver.get("https://ackodrive.com/used/car-valuation/")
                 
-                if response.status_code == 200:
-                    soup = BeautifulSoup(response.content, 'html.parser')
-                    all_details = {}
+                # 1. Find the input box and type the number
+                # Acko uses a generic input or a specific ID for the form
+                wait = WebDriverWait(driver, 10)
+                input_field = wait.until(EC.presence_of_element_located((By.TAG_NAME, "input")))
+                input_field.send_keys(v_number)
+                
+                # 2. Click the 'Check' or 'Next' button
+                # Finding button by text since IDs change
+                button = driver.find_element(By.XPATH, "//button[contains(text(), 'Check') or contains(text(), 'Next')]")
+                button.click()
 
-                    # 1. FETCH TOP SUMMARY (Make/Model and Owner)
-                    # We ensure these go into the 'all_details' dictionary first
-                    summary_containers = soup.find_all(class_=lambda x: x and 'input_vehical_layout' in x)
-                    for container in summary_containers:
-                        label_tag = container.find(class_=lambda x: x and 'label' in x)
-                        value_tag = container.find(class_=lambda x: x and ('vehicalModel' in x or 'ownerName' in x))
-                        
-                        if label_tag and value_tag:
-                            all_details[label_tag.text.strip()] = value_tag.text.strip()
+                # 3. Wait for the result elements to appear
+                # Using the classes you provided in your HTML snippet
+                wait.until(EC.presence_of_element_located((By.CLASS_NAME, "styles__Title-sc-c73839da-5")))
+                
+                # 4. Extract Data
+                title = driver.find_element(By.CLASS_NAME, "styles__Title-sc-c73839da-5").text
+                reg_no = driver.find_element(By.CLASS_NAME, "styles__RegNo-sc-c73839da-6").text
+                img_url = driver.find_element(By.CLASS_NAME, "styles__ImageData-sc-c73839da-4").get_attribute("src")
+                other_data = driver.find_element(By.CLASS_NAME, "styles__OtherData-sc-c73839da-14").text
+                
+                # 5. Split 'Other Data' (e.g., VXI • petrol • 2022)
+                parts = other_data.split("•")
+                variant = parts[0].strip() if len(parts) > 0 else "N/A"
+                fuel = parts[1].strip() if len(parts) > 1 else "N/A"
+                year = parts[2].strip() if len(parts) > 2 else "N/A"
 
-                    # 2. FETCH RTO TABLE DETAILS
-                    table_items = soup.find_all(class_=lambda x: x and 'detailItem' in x)
-                    for item in table_items:
-                        label_tag = item.find(class_=lambda x: x and 'itemText' in x)
-                        value_tag = item.find(class_=lambda x: x and 'itemSubTitle' in x)
-                        if label_tag and value_tag:
-                            all_details[label_tag.text.strip()] = value_tag.text.strip()
+                # --- DISPLAY OUTPUT ---
+                st.success("Data Extracted Successfully!")
+                
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    st.image(img_url, caption="Vehicle Preview", use_column_width=True)
+                
+                with col2:
+                    results = {
+                        "Field": ["Title", "Reg No", "Variant", "Fuel Type", "Year"],
+                        "Information": [title, reg_no, variant, fuel, year]
+                    }
+                    df = pd.DataFrame(results)
+                    st.table(df)
 
-                    if all_details:
-                        st.success(f"Results for {v_number}")
-                        
-                        # Prepare DataFrame
-                        df = pd.DataFrame(list(all_details.items()), columns=["Field", "Information"])
-                        
-                        # --- DISPLAY RESULTS ---
-                        st.markdown("### Technical Specifications & Ownership")
-                        st.table(df)
-                        
-                        # --- EXCEL DOWNLOAD SECTION ---
-                        excel_data = to_excel(df)
-                        st.sidebar.markdown("### 📥 Download Center")
-                        st.sidebar.download_button(
-                            label="Download Excel Report",
-                            data=excel_data,
-                            file_name=f"Vehicle_Report_{v_number}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-                        
-                        st.markdown(f"[View Original Source]({target_url})")
-                    else:
-                        st.error("Could not parse details. The layout might have changed.")
-                else:
-                    st.error(f"Could not reach CarInfo. Status Code: {response.status_code}")
-                    
+                # --- DOWNLOAD EXCEL ---
+                excel_df = pd.DataFrame([{
+                    "Title": title, "RegNo": reg_no, "Variant": variant, "Fuel": fuel, "Year": year, "Image": img_url
+                }])
+                
+                st.download_button(
+                    label="📥 Download Excel Report",
+                    data=excel_df.to_csv(index=False).encode('utf-8'),
+                    file_name=f"Acko_Report_{v_number}.csv",
+                    mime="text/csv",
+                )
+
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error: Could not find results. {e}")
+        finally:
+            driver.quit()
     else:
-        st.warning("Please enter a vehicle number.")
+        st.warning("Please enter a registration number.")
