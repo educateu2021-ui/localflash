@@ -6,83 +6,66 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-import time
+from webdriver_manager.core.os_manager import ChromeType
 
-# --- Page Configuration ---
-st.set_page_config(page_title="Vehicle Detail Finder", page_icon="🚗")
+# --- Page Setup ---
+st.set_page_config(page_title="PB Vehicle Scraper", page_icon="🚗")
+st.title("🚗 PolicyBazaar Vehicle Scraper")
 
-st.title("🚗 Vehicle Details Extractor")
-st.markdown("Enter your vehicle number to fetch details from PolicyBazaar.")
-
-# --- Selenium Driver Setup ---
+@st.cache_resource
 def get_driver():
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    # User agent helps bypass simple bot detection
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36")
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    service = Service(ChromeDriverManager().install())
-    return webdriver.Chrome(service=service, options=chrome_options)
+    # This line is the FIX: It tells the manager to look for CHROMIUM (Streamlit's default)
+    return webdriver.Chrome(
+        service=Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()),
+        options=options
+    )
 
-# --- Scraping Function ---
-def fetch_vehicle_data(v_number):
+def fetch_details(veh_num):
     driver = get_driver()
     url = "https://www.policybazaar.com/rto/vehicle-owner-details/"
     
     try:
         driver.get(url)
-        wait = WebDriverWait(driver, 20)
-
-        # 1. Type Vehicle Number
-        input_field = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input.carRegistrationNumber")))
-        input_field.clear()
-        input_field.send_keys(v_number)
+        wait = WebDriverWait(driver, 15)
         
-        # 2. Click Submit
-        submit_btn = driver.find_element(By.ID, "btnSubmit")
-        submit_btn.click()
-
-        # 3. Wait for the result section to load (Step 9 in your HTML)
-        # We wait for the 'MakeModel' class to appear
-        wait.until(EC.visibility_of_element_located((By.CLASS_NAME, "MakeModel")))
+        # 1. Wait for and fill the input field
+        input_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input.carRegistrationNumber")))
+        input_box.clear()
+        input_box.send_keys(veh_num)
         
-        # 4. Extract Details
+        # 2. Click Check Details
+        btn = driver.find_element(By.ID, "btnSubmit")
+        btn.click()
+        
+        # 3. Wait for the result screen to load
+        wait.until(EC.visibility_of_element_located((By.CLASS_NAME, "carDetailsFetched")))
+        
+        # 4. Extract Data
         make_model = driver.find_element(By.CLASS_NAME, "MakeModel").text
-        fuel_type = driver.find_element(By.CLASS_NAME, "fuel").text
+        fuel = driver.find_element(By.CLASS_NAME, "fuel").text
         
-        return {
-            "status": "success",
-            "make_model": make_model,
-            "fuel": fuel_type
-        }
-
+        return {"success": True, "make": make_model, "fuel": fuel}
     except Exception as e:
-        # Check if we were blocked by Cloudflare
-        if "cloudflare" in driver.page_source.lower():
-            return {"status": "error", "message": "Blocked by Cloudflare/Bot Detection."}
-        return {"status": "error", "message": str(e)}
-    finally:
-        driver.quit()
+        return {"success": False, "error": str(e)}
 
-# --- UI Logic ---
-v_input = st.text_input("Vehicle Number", placeholder="e.g. DL1AB1234").upper().replace(" ", "")
+# --- UI Interface ---
+v_number = st.text_input("Enter Vehicle Number", placeholder="DL1AB1234").upper()
 
-if st.button("Check Details"):
-    if v_input:
-        with st.spinner("Fetching details from PolicyBazaar..."):
-            result = fetch_vehicle_data(v_input)
-            
-            if result["status"] == "success":
-                st.success("Details Found!")
-                col1, col2 = st.columns(2)
-                col1.metric("Manufacturer/Model", result["make_model"])
-                col2.metric("Fuel Type", result["fuel"])
+if st.button("Fetch Data"):
+    if v_number:
+        with st.spinner("Searching..."):
+            res = fetch_details(v_number)
+            if res["success"]:
+                st.success(f"Found: {res['make']}")
+                st.info(f"Fuel Type: {res['fuel']}")
             else:
-                st.error(f"Error: {result['message']}")
-                st.info("Note: The website might be blocking the automated request. Try again later.")
+                st.error("Could not find details. The site might be blocking the request.")
     else:
-        st.warning("Please enter a vehicle number.")
+        st.warning("Please enter a number.")
