@@ -3,25 +3,32 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 
-st.set_page_config(page_title="E-Vandi Vehicle Fetcher", page_icon="🚗")
+# Set page config as the very first command
+st.set_page_config(page_title="E-Vandi Vehicle Detail Fetcher", page_icon="🚗")
 
-# Custom CSS to match your branding
+# Custom CSS for styling
 st.markdown("""
     <style>
-        .main { background-color: #f5ffff; }
-        .stButton>button { background-color: #08979c; color: white; border-radius: 20px; width: 100%; }
+    .main { background-color: #f5ffff; }
+    .stButton>button { 
+        background-color: #08979c; 
+        color: white; 
+        border-radius: 20px; 
+        width: 100%; 
+        font-weight: bold;
+    }
+    .stTable { background-color: white; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🚗 Vehicle Detail Fetcher")
-st.info("Enter the vehicle number to retrieve RTO details.")
+st.info("Enter the vehicle number to retrieve full RTO and model details.")
 
-# User Input
+# User Input - normalization to uppercase and no spaces
 v_number = st.text_input("Vehicle Number", placeholder="e.g. TN18BK0911").upper().replace(" ", "")
 
 if st.button("Fetch Details"):
     if v_number:
-        # Based on your HTML, the site routes directly to this URL
         target_url = f"https://www.carinfo.app/rto-vehicle-registration-detail/rto-details/{v_number}"
         
         headers = {
@@ -29,45 +36,61 @@ if st.button("Fetch Details"):
         }
 
         try:
-            with st.spinner('Fetching from CarInfo...'):
-                response = requests.get(target_url, headers=headers)
+            with st.spinner('Accessing secure RTO records...'):
+                response = requests.get(target_url, headers=headers, timeout=10)
                 
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.content, 'html.parser')
                     
-                    # Finding the detail containers based on the CSS classes in your HTML
-                    # Specifically looking for: expand_component_detailItem__V43eh
+                    # Store all found details in a dictionary
                     details = {}
+                    
+                    # Logic to find detail items: CarInfo uses specific classes like 'detailItem' 
+                    # for labels (itemText) and values (itemSubTitle)
                     items = soup.find_all(class_=lambda x: x and 'detailItem' in x)
                     
                     for item in items:
-                        # Extract Label (e.g., Owner Name)
                         label_tag = item.find(class_=lambda x: x and 'itemText' in x)
-                        # Extract Value (e.g., John Doe)
                         value_tag = item.find(class_=lambda x: x and 'itemSubTitle' in x)
                         
                         if label_tag and value_tag:
-                            details[label_tag.text.strip()] = value_tag.text.strip()
+                            label = label_tag.text.strip()
+                            value = value_tag.text.strip()
+                            details[label] = value
 
                     if details:
-                        st.success(f"Results for {v_number}")
+                        st.success(f"Full Details for {v_number}")
                         
-                        # Displaying in a clean table format
+                        # Use a DataFrame to organize the data for a better UI experience
                         df = pd.DataFrame(list(details.items()), columns=["Field", "Information"])
+                        
+                        # Highlighting specific fields the user requested
+                        important_fields = ["Make & Model", "Registration Date", "Fuel Type", "Vehicle Class"]
+                        
+                        # Displaying results
                         st.table(df)
                         
+                        # Quick summary view for Make/Year if they exist in the results
+                        make_model = details.get("Make & Model", "N/A")
+                        reg_year = details.get("Registration Date", "N/A")
+                        
+                        st.markdown(f"**Quick View:**")
+                        st.write(f"🔹 **Make/Model:** {make_model}")
+                        st.write(f"🔹 **Reg. Date/Year:** {reg_year}")
+                        
+                        st.markdown(f"---")
                         st.markdown(f"[View Original Source]({target_url})")
                     else:
-                        st.error("Could not find specific details. The vehicle might not be in the database or the site is blocking the request.")
+                        st.error("Vehicle records not found or data structure has changed. Please check the number.")
                 else:
-                    st.error(f"Site unreachable (Status: {response.status_code})")
+                    st.error(f"Unable to connect to service. Error Code: {response.status_code}")
                     
         except Exception as e:
-            st.error(f"An error occurred: {e}")
+            st.error(f"A technical error occurred: {e}")
     else:
-        st.warning("Please enter a vehicle number.")
+        st.warning("Please enter a valid vehicle registration number.")
 
-st.sidebar.markdown("### Instructions")
-st.sidebar.write("1. Enter Plate Number.")
-st.sidebar.write("2. Click Fetch.")
-st.sidebar.write("3. Details are parsed from the public RTO registry via CarInfo.")
+st.sidebar.markdown("### User Guide")
+st.sidebar.write("1. Input your Plate Number (e.g., TN01AB1234).")
+st.sidebar.write("2. Press 'Fetch Details'.")
+st.sidebar.write("3. The app parses public RTO data to show Owner, Model, and Registration year.")
