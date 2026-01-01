@@ -1,83 +1,87 @@
 import streamlit as st
-import pandas as pd
-import requests
-import os
-import zipfile
-from io import BytesIO
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+import time
 
-# --- CONFIGURATION ---
-LOCAL_SAVE_PATH = r"C:\Users\kanna\Pictures\App streamlit and git hub app"
+# --- Page Config ---
+st.set_page_config(page_title="Vehicle Detail Scraper", page_icon="🚗")
+st.title("🚗 Vehicle Info Extractor")
+st.write("Enter a vehicle number to fetch details from the portal.")
 
-st.set_page_config(page_title="Bulk Link Fetcher", page_icon="📦")
-
-st.title("📦 Bulk Link Fetcher")
-st.write("Upload an Excel file with a column of URLs to download them all at once.")
-
-# --- UI: FILE UPLOAD ---
-uploaded_file = st.file_uploader("Upload Excel or CSV file", type=["xlsx", "csv"])
-
-if uploaded_file:
-    # Read the file
-    if uploaded_file.name.endswith('.csv'):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+# --- Selenium Setup ---
+def get_driver():
+    options = Options()
+    options.add_argument("--headless")  # Run without opening a browser window
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
     
-    st.write("### Preview of Data", df.head())
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=options
+    )
+    return driver
+
+# --- Scraping Logic ---
+def fetch_vehicle_details(v_number):
+    driver = get_driver()
+    # Replace with the actual URL of the insurance portal
+    TARGET_URL = "https://www.example-insurance-site.com" 
     
-    # Let user select the column containing links
-    column_name = st.selectbox("Select the column containing the URLs:", df.columns)
-    
-    if st.button("Start Bulk Download"):
-        links = df[column_name].dropna().tolist()
+    try:
+        driver.get(TARGET_URL)
+        wait = WebDriverWait(driver, 15)
+
+        # 1. Locate the input field and type the number
+        input_field = wait.until(EC.presence_of_element_located((By.CLASS_NAME, "carRegistrationNumber")))
+        input_field.send_keys(v_number)
+
+        # 2. Click the 'Check Details' button
+        submit_btn = driver.find_element(By.ID, "btnSubmit")
+        submit_btn.click()
+
+        # 3. Wait for the result div to appear (Step 9 in your HTML)
+        # We wait for the 'MakeModel' span to have text
+        wait.until(EC.visibility_of_element_located((By.CLASS_NAME, "carDetailsFetched")))
         
-        if not links:
-            st.warning("No links found in the selected column.")
-        else:
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # Temporary storage for the ZIP file
-            zip_buffer = BytesIO()
-            
-            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-                for i, link in enumerate(links):
-                    try:
-                        # 1. Fetch File
-                        response = requests.get(link, timeout=15)
-                        response.raise_for_status()
-                        
-                        # Get filename
-                        filename = link.split("/")[-1].split("?")[0] or f"file_{i}"
-                        content = response.content
-                        
-                        # 2. Save to Local C: Drive
-                        if not os.path.exists(LOCAL_SAVE_PATH):
-                            os.makedirs(LOCAL_SAVE_PATH)
-                        
-                        local_file_path = os.path.join(LOCAL_SAVE_PATH, filename)
-                        with open(local_file_path, "wb") as f:
-                            f.write(content)
-                        
-                        # 3. Add to ZIP (for the web download)
-                        zip_file.writestr(filename, content)
-                        
-                    except Exception as e:
-                        st.error(f"Failed to download {link}: {e}")
-                    
-                    # Update Progress
-                    progress = (i + 1) / len(links)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processing: {i+1}/{len(links)}")
+        # 4. Extract the data
+        make_model = driver.find_element(By.CLASS_NAME, "MakeModel").text
+        fuel_type = driver.find_element(By.CLASS_NAME, "fuel").text
+        
+        return {
+            "Status": "Success",
+            "Vehicle": make_model,
+            "Fuel": fuel_type
+        }
 
-            st.success(f"✅ All files processed and saved locally to: {LOCAL_SAVE_PATH}")
+    except Exception as e:
+        return {"Status": "Error", "Message": str(e)}
+    finally:
+        driver.quit()
 
-            # 4. Provide the All-in-One ZIP Download
-            st.divider()
-            st.write("### Web Download")
-            st.download_button(
-                label="📥 Download All Files as ZIP",
-                data=zip_buffer.getvalue(),
-                file_name="bulk_downloads.zip",
-                mime="application/zip"
-            )
+# --- Streamlit UI ---
+veh_num = st.text_input("Enter Vehicle Number (e.g., DL1AB1234)", placeholder="MH01AB1234")
+
+if st.button("Search Vehicle"):
+    if veh_num:
+        with st.spinner('Fetching details from the portal...'):
+            result = fetch_vehicle_details(veh_num)
+            
+            if result["Status"] == "Success":
+                st.success("Vehicle Found!")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Make & Model", result["Vehicle"])
+                with col2:
+                    st.metric("Fuel Type", result["Fuel"])
+                
+                # Visual display of the found data
+                st.info(f"The system identified this vehicle as a **{result['Vehicle']}** running on **{result['Fuel']}**.")
+            else:
+                st.error(f"Could not find details. Error: {result['Message']}")
+    else:
+        st.warning("Please enter a valid vehicle number.")
